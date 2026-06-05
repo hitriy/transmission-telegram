@@ -121,8 +121,9 @@ var (
 	Username     string
 	Password     string
 	LogFile      string
-	TransLogFile string // Transmission log file
-	NoLive       bool
+	TransLogFile   string // Transmission log file
+	NoLive         bool
+	NoTransmission bool
 
 	// transmission
 	Client *transmission.TransmissionClient
@@ -187,6 +188,9 @@ func init() {
 	flag.StringVar(&LogFile, "logfile", "", "Send logs to a file")
 	flag.StringVar(&TransLogFile, "transmission-logfile", "", "Open transmission logfile to monitor torrents completion")
 	flag.BoolVar(&NoLive, "no-live", false, "Don't edit and update info after sending")
+	flag.StringVar(&RuTrackerUser, "rutracker-user", "", "RuTracker username (env RT_USER)")
+	flag.StringVar(&RuTrackerPass, "rutracker-pass", "", "RuTracker password (env RT_PASS)")
+	flag.BoolVar(&NoTransmission, "no-transmission", false, "Disable Transmission; RuTracker search only")
 
 	// set the usage message
 	flag.Usage = func() {
@@ -272,13 +276,17 @@ func init() {
 
 // init transmission
 func init() {
+	if NoTransmission {
+		logger.Printf("[INFO] Transmission disabled (-no-transmission)")
+		return
+	}
+
 	var err error
 	Client, err = transmission.New(RPCURL, Username, Password)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] Transmission: Make sure you have the right URL, Username and Password\n")
 		os.Exit(1)
 	}
-
 }
 
 // init telegram
@@ -300,132 +308,36 @@ func init() {
 		fmt.Fprintf(os.Stderr, "[ERROR] Telegram: %s\n", err)
 		os.Exit(1)
 	}
+
+	initRuTracker()
 }
 
 func main() {
 	for update := range Updates {
-		// ignore edited messages
+		if update.CallbackQuery != nil {
+			if update.CallbackQuery.From == nil || !Masters.Contains(update.CallbackQuery.From.UserName) {
+				continue
+			}
+			if RTHandler != nil {
+				go RTHandler.HandleCallback(update.CallbackQuery)
+			}
+			continue
+		}
+
 		if update.Message == nil {
 			continue
 		}
 
-		// ignore non masters
 		if !Masters.Contains(update.Message.From.UserName) {
 			logger.Printf("[INFO] Ignored a message from: %s", update.Message.From.String())
 			continue
 		}
 
-		// update chatID for complete notification
 		if TransLogFile != "" && chatID != update.Message.Chat.ID {
 			chatID = update.Message.Chat.ID
 		}
 
-		// tokenize the update
-		tokens := strings.Split(update.Message.Text, " ")
-
-		// preprocess message based on URL schema
-		// in case those were added from the mobile via "Share..." option
-		// when it is not possible to easily prepend it with "add" command
-		if strings.HasPrefix(tokens[0], "magnet") || strings.HasPrefix(tokens[0], "http") {
-			tokens = append([]string{"add"}, tokens...)
-		}
-
-		command := strings.ToLower(tokens[0])
-
-		switch command {
-		case "list", "/list", "li", "/li", "/ls", "ls":
-			go list(update, tokens[1:])
-
-		case "head", "/head", "he", "/he":
-			go head(update, tokens[1:])
-
-		case "tail", "/tail", "ta", "/ta":
-			go tail(update, tokens[1:])
-
-		case "downs", "/downs", "dg", "/dg":
-			go downs(update)
-
-		case "seeding", "/seeding", "sd", "/sd":
-			go seeding(update)
-
-		case "paused", "/paused", "pa", "/pa":
-			go paused(update)
-
-		case "checking", "/checking", "ch", "/ch":
-			go checking(update)
-
-		case "active", "/active", "ac", "/ac":
-			go active(update)
-
-		case "errors", "/errors", "er", "/er":
-			go errors(update)
-
-		case "sort", "/sort", "so", "/so":
-			go sort(update, tokens[1:])
-
-		case "trackers", "/trackers", "tr", "/tr":
-			go trackers(update)
-
-		case "downloaddir", "dd":
-			go downloaddir(update, tokens[1:])
-
-		case "add", "/add", "ad", "/ad":
-			go add(update, tokens[1:])
-
-		case "search", "/search", "se", "/se":
-			go search(update, tokens[1:])
-
-		case "latest", "/latest", "la", "/la":
-			go latest(update, tokens[1:])
-
-		case "info", "/info", "in", "/in":
-			go info(update, tokens[1:])
-
-		case "stop", "/stop", "sp", "/sp":
-			go stop(update, tokens[1:])
-
-		case "start", "/start", "st", "/st":
-			go start(update, tokens[1:])
-
-		case "check", "/check", "ck", "/ck":
-			go check(update, tokens[1:])
-
-		case "stats", "/stats", "sa", "/sa":
-			go stats(update)
-
-		case "downlimit", "dl":
-			go downlimit(update, tokens[1:])
-
-		case "uplimit", "ul":
-			go uplimit(update, tokens[1:])
-
-		case "speed", "/speed", "ss", "/ss":
-			go speed(update)
-
-		case "count", "/count", "co", "/co":
-			go count(update)
-
-		case "del", "/del", "rm", "/rm":
-			go del(update, tokens[1:])
-
-		case "deldata", "/deldata":
-			go deldata(update, tokens[1:])
-
-		case "help", "/help":
-			go send(HELP, update.Message.Chat.ID, true)
-
-		case "version", "/version", "ver", "/ver":
-			go getVersion(update)
-
-		case "":
-			// might be a file received
-			go receiveTorrent(update)
-
-		default:
-			// no such command, try help
-			go send("No such command, try /help", update.Message.Chat.ID, false)
-
-		}
+		dispatchMessage(update)
 	}
 }
 
@@ -1534,6 +1446,10 @@ func deldata(ud tgbotapi.Update, tokens []string) {
 
 // getVersion sends transmission version + transmission-telegram version
 func getVersion(ud tgbotapi.Update) {
+	if NoTransmission || Client == nil {
+		send(fmt.Sprintf("Transmission: disabled\nTransmission-telegram *%s*", VERSION), ud.Message.Chat.ID, true)
+		return
+	}
 	send(fmt.Sprintf("Transmission *%s*\nTransmission-telegram *%s*", Client.Version(), VERSION), ud.Message.Chat.ID, true)
 }
 

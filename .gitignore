@@ -1,0 +1,34 @@
+# Binaries
+transmission-telegram
+transmission-telegram.exe
+transmission-telegram.exe~
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+/vendor/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Node (legacy)
+node_modules/
